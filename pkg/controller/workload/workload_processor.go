@@ -1115,22 +1115,32 @@ func (p *Processor) deleteEndpointRecords(endpointKeys []bpf.EndpointKey) error 
 		return endpointKeys[i].Prio > endpointKeys[j].Prio
 	})
 
+	var firstErr error
 	for _, ek := range endpointKeys {
 		sk.ServiceId = ek.ServiceId
 		if err := p.bpf.ServiceLookup(&sk, &sv); err == nil {
 			if err = p.bpf.EndpointLookup(&ek, &ev); err != nil {
 				log.Errorf("Lookup endpoint %#v failed: %v", ek, err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("lookup endpoint %#v failed: %w", ek, err)
+				}
 				continue
 			}
 
 			if err := p.deleteEndpoint(ek, ev, sv, sk); err != nil {
 				log.Errorf("deleteEndpoint failed: %v", err)
+				if firstErr == nil {
+					firstErr = fmt.Errorf("deleteEndpoint for %#v failed: %w", ek, err)
+				}
 				continue
 			}
 			p.EndpointCache.DeleteEndpointWithPriority(ek.ServiceId, ev.BackendUid, ek.Prio)
 		} else {
 			// service not exist, we should also delete the endpoint
 			log.Warnf("service %d not found, should not occur: %v", ek.ServiceId, err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("service %d not found for endpoint %#v: %w", ek.ServiceId, ek, err)
+			}
 
 			if err = p.bpf.EndpointLookup(&ek, &ev); err != nil {
 				log.Errorf("Lookup endpoint %#v failed: %s", ek, err)
@@ -1144,7 +1154,7 @@ func (p *Processor) deleteEndpointRecords(endpointKeys []bpf.EndpointKey) error 
 			p.EndpointCache.DeleteEndpointWithPriority(ek.ServiceId, ev.BackendUid, ek.Prio)
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // In order to make sure the bpf prog can always get the healthy endpoint, we should update the bpf map in the following order:
